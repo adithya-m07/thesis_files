@@ -41,6 +41,8 @@
 #include <rte_ip.h>
 #include <rte_udp.h>
 #include <rte_tcp.h>
+#include <rte_hash.h>
+#include <rte_jhash.h> 
 
 static volatile bool force_quit;
 
@@ -53,7 +55,7 @@ static int promiscuous_on;
 #define RTE_LOGTYPE_L2FWD RTE_LOGTYPE_USER1
 
 #define MAX_PKT_BURST 32
-#define BURST_TX_DRAIN_US 10 /* TX drain every ~100us */
+#define BURST_TX_DRAIN_US 10 /* TX drain every ~10us */
 #define MEMPOOL_CACHE_SIZE 256
 
 /*
@@ -107,18 +109,21 @@ struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
 /* Per-port statistics struct */
 struct l2fwd_port_statistics {
 	uint64_t tx;
+	uint64_t prev_tx;
 	uint64_t rx;
+	uint64_t prev_rx;
 	uint64_t dropped;
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
+struct rte_eth_stats old_eth_stats;
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 10; /* default period is 10 seconds */
+static uint64_t timer_period = 1; /* default period is 10 seconds */
 
 
 // Port Knocking DS
-#define MAX_IPV4_5TUPLES 32
+#define MAX_IPV4_5TUPLES 512
 enum state {
   CLOSED_0 = 0,
   CLOSED_1,
@@ -132,31 +137,25 @@ enum port_list{
 	PORT_2
 };
 
-// struct ipv4_5tuple {
-// 	uint32_t ip_dst;
-// 	uint32_t ip_src;
-// 	uint16_t port_dst;
-// 	uint16_t port_src;
-// 	uint8_t  proto;
-// } __rte_packed;
 
-struct ipv4_state_table{
-	uint32_t ip_src;
-	enum state packet_state;
-};
-struct ipv4_state_table state_table[MAX_IPV4_5TUPLES];
 
 
 /* Print out statistics on packets dropped */
 static void
 print_stats(void)
 {
-	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx;
+	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx, prev_total_packets_tx, prev_total_packets_rx;
+	uint64_t timer_in_sec = timer_period/rte_get_timer_hz();
+	struct rte_eth_stats eth_stats;
 	unsigned portid;
+	int ret;
+
 
 	total_packets_dropped = 0;
 	total_packets_tx = 0;
 	total_packets_rx = 0;
+	prev_total_packets_rx = 0;
+	prev_total_packets_tx = 0;
 
 	const char clr[] = { 27, '[', '2', 'J', '\0' };
 	const char topLeft[] = { 27, '[', '1', ';', '1', 'H','\0' };
@@ -170,82 +169,116 @@ print_stats(void)
 		/* skip disabled ports */
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
-		printf("\nStatistics for port %u ------------------------------"
-			   "\nPackets sent: %24"PRIu64
-			   "\nPackets received: %20"PRIu64
-			   "\nPackets dropped: %21"PRIu64,
-			   portid,
-			   port_statistics[portid].tx,
-			   port_statistics[portid].rx,
-			   port_statistics[portid].dropped);
+		unsigned tx = 0, rx = 0, dropped = 0, prev_tx = 0, prev_rx = 0;
+		
+		tx += port_statistics[portid].tx;
+		rx += port_statistics[portid].rx;
+		dropped += port_statistics[portid].dropped;
 
-		total_packets_dropped += port_statistics[portid].dropped;
-		total_packets_tx += port_statistics[portid].tx;
-		total_packets_rx += port_statistics[portid].rx;
+		prev_tx = port_statistics[portid].tx - port_statistics[portid].prev_tx;
+		port_statistics[portid].prev_tx = port_statistics[portid].tx;
+
+		prev_rx = port_statistics[portid].rx - port_statistics[portid].prev_rx;
+		port_statistics[portid].prev_rx = port_statistics[portid].rx;
+
+		prev_total_packets_rx += prev_rx;
+		prev_total_packets_tx += prev_tx;
+
+		printf("\nStatistics for lcore %u ------------------------------"
+			"\nPackets sent: %24"PRIu64
+			"\nPackets received: %20"PRIu64
+			"\nPackets dropped: %21"PRIu64
+			"\ntx MPPS: %29"PRIu64
+			"\nrx MPPS: %29"PRIu64,
+			portid,
+			port_statistics[portid].tx,
+			port_statistics[portid].rx,
+			port_statistics[portid].dropped,
+			(prev_tx)/ timer_in_sec,
+			(prev_rx)/ timer_in_sec);
+		
+		total_packets_dropped += dropped;
+		total_packets_tx += tx;
+		total_packets_rx += rx;
 	}
+	// TODO: Update get port statistics to ensure that it
+	// supports printing stats for multiple ports
+	ret = rte_eth_stats_get(0, &eth_stats);
 	printf("\nAggregate statistics ==============================="
 		   "\nTotal packets sent: %18"PRIu64
 		   "\nTotal packets received: %14"PRIu64
-		   "\nTotal packets dropped: %15"PRIu64,
+		   "\nTotal packets dropped: %15"PRIu64
+		   "\nTotal packets tx: %20"PRIu64
+		   "\nTotal packets rx: %20"PRIu64
+		   "\n\nTotal Successfully rx pkt: %11"PRIu64
+		   "\nTotal Successfully tx pkt: %11"PRIu64
+		   "\nTotal Successfully rx byt: %11"PRIu64
+		   "\nTotal Successfully tx byt: %11"PRIu64
+		   "\nTotal rx H/w drops: %18"PRIu64
+		   "\nTotal error pkt: %21"PRIu64
+		   "\nTotal failed transmission: %11"PRIu64
+		   "\nTotal rx mbuf failure: %15"PRIu64,
 		   total_packets_tx,
 		   total_packets_rx,
-		   total_packets_dropped);
+		   total_packets_dropped,
+		    prev_total_packets_tx/timer_in_sec,
+		    prev_total_packets_rx/timer_in_sec,
+			eth_stats.ipackets - old_eth_stats.ipackets,
+			eth_stats.opackets - old_eth_stats.opackets,
+			eth_stats.ibytes - old_eth_stats.ibytes,
+			eth_stats.obytes - old_eth_stats.obytes,
+			eth_stats.imissed - old_eth_stats.imissed,
+			eth_stats.ierrors - old_eth_stats.ierrors,
+			eth_stats.oerrors - old_eth_stats.oerrors,
+			eth_stats.rx_nombuf - old_eth_stats.rx_nombuf);
 	printf("\n====================================================\n");
-
+	rte_memcpy(&old_eth_stats, &eth_stats, sizeof(struct rte_eth_stats));
 	fflush(stdout);
 }
 
-static void 
-lookup_state(uint32_t src_ip, uint16_t dst_port)
+static inline void 
+lookup_state(uint32_t src_ip, uint16_t dst_port, struct rte_hash *state_map)
 {
-	for(int i = 0; i < MAX_IPV4_5TUPLES; i++){
-		uint32_t *state_src_ip = &state_table[i].ip_src;
-		enum state *pkt_state = &state_table[i].packet_state;
-		if(*state_src_ip == 0){
-			*state_src_ip = src_ip;
-			if(dst_port == PORT_0){
-				*pkt_state = CLOSED_1;
-			}
-			else{
-				*pkt_state = CLOSED_0;
-			}
-		}
-		if(src_ip == *state_src_ip){
-			if(*pkt_state == OPEN){
-				// TODO: Check what to do for XDP_PASS
-				// printf("THIS PACKET IS OPEN\n");
-			}
-			else if(*pkt_state == CLOSED_0 && dst_port == PORT_0){
-				// printf("THIS PACKET IS 1\n");
-				*pkt_state = CLOSED_1;
-			}
-			else if(*pkt_state == CLOSED_1 && dst_port == PORT_1){
-				// printf("THIS PACKET IS 2\n");
-				*pkt_state = CLOSED_2;
-			}
-			else if(*pkt_state == CLOSED_2 && dst_port == PORT_2){
-				// printf("THIS PACKET IS 3\n");
-				*pkt_state = OPEN;
-			}
-			else{
-				// printf("THIS PACKET IS Closed\n");
-				*pkt_state = CLOSED_0;
-			}
-		}
-		
+	enum state pkt_state;
+	int ret = rte_hash_lookup_data(state_map, &src_ip, (void**)&pkt_state);
+	if(ret == -ENOENT){
+		pkt_state = CLOSED_0;
 	}
+	else if(ret < 0){
+		rte_exit(EXIT_FAILURE, "State Table Invalid Parameters %d\n", ret);
+	}
+
+	if(dst_port == PORT_0 && pkt_state == CLOSED_0){
+		// printf("CLOSED_1\n");
+		pkt_state = CLOSED_1;
+	}
+	else if(dst_port == PORT_1 && pkt_state == CLOSED_1){
+		// printf("CLOSED_2\n");
+		pkt_state = CLOSED_2;
+	}
+	else if(dst_port == PORT_2 && pkt_state == CLOSED_2){
+		// printf("OPEN\n");
+		pkt_state = OPEN;
+	}
+	else{
+		// printf("CLOSED_0\n");
+		pkt_state = CLOSED_0;
+	}
+	rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
 }
 
 static void 
-port_knocking_parse_ipv4(struct rte_mbuf *m)
+port_knocking_parse_ipv4(struct rte_mbuf *m, struct rte_hash * state_map)
 {
 	struct rte_ipv4_hdr *iphdr;
-	uint32_t src_ip; 
+	uint32_t src_ip;
+	// rte_be32_t src_ip; 
 	uint16_t dst_port;
 	struct rte_udp_hdr *udp;
 	struct rte_tcp_hdr *tcp;
 	/* Remove the Ethernet header from the input packet. 8< */
-	iphdr = (struct rte_ipv4_hdr *) rte_pktmbuf_adj(m, (uint16_t)sizeof(struct rte_ether_hdr));
+	// iphdr = (struct rte_ipv4_hdr *) rte_pktmbuf_adj(m, (uint16_t)sizeof(struct rte_ether_hdr));
+	iphdr = (struct rte_ipv4_hdr *) (rte_pktmbuf_mtod(m, void *) + (uint16_t)sizeof(struct rte_ether_hdr));
 	RTE_ASSERT(iphdr != NULL);
 	char ipAddr[16];
 
@@ -269,7 +302,7 @@ port_knocking_parse_ipv4(struct rte_mbuf *m)
 		break;
 	}
 
-	// lookup_state(src_ip, dst_port);
+	lookup_state(src_ip, dst_port, state_map);
 }
 
 static void
@@ -281,9 +314,9 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
 	/* 02:00:00:00:00:xx */
-	tmp = &eth->dst_addr.addr_bytes[0];
-	*((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
-
+	// tmp = &eth->dst_addr.addr_bytes[0];
+	// *((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
+	rte_ether_addr_copy(&eth->src_addr, &eth->dst_addr);
 	/* src addr */
 	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
 }
@@ -292,9 +325,9 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 
 /* Simple forward. 8< */
 static void
-port_knock_simple_forward(struct rte_mbuf *m, unsigned portid)
+port_knock_simple_forward(struct rte_mbuf *m, unsigned portid, struct rte_hash *state_map)
 {
-	port_knocking_parse_ipv4(m);
+	
 	unsigned dst_port;
 	int sent;
 	struct rte_eth_dev_tx_buffer *buffer;
@@ -303,6 +336,8 @@ port_knock_simple_forward(struct rte_mbuf *m, unsigned portid)
 
 	if (mac_updating)
 		l2fwd_mac_updating(m, dst_port);
+	
+	port_knocking_parse_ipv4(m, state_map);
 
 	buffer = tx_buffer[dst_port];
 	sent = rte_eth_tx_buffer(dst_port, 0, buffer, m);
@@ -336,6 +371,19 @@ port_knock_main_loop(void)
 		RTE_LOG(INFO, L2FWD, "lcore %u has nothing to do\n", lcore_id);
 		return;
 	}
+
+	// Hash table for state
+	char name_buffer[14];
+	snprintf(name_buffer, sizeof(name_buffer), "state_map%d", lcore_id);
+	struct rte_hash_parameters params = { 
+		.entries = MAX_IPV4_5TUPLES,
+		.key_len = sizeof(rte_be32_t),
+		.hash_func = rte_jhash,
+		.socket_id = rte_socket_id(),
+		.name = name_buffer,
+	};
+	struct rte_hash *state_map;
+	state_map = rte_hash_create(&params);
 
 	RTE_LOG(INFO, L2FWD, "entering main loop on lcore %u\n", lcore_id);
 
@@ -406,7 +454,7 @@ port_knock_main_loop(void)
 			for (j = 0; j < nb_rx; j++) {
 				m = pkts_burst[j];
 				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
-				port_knock_simple_forward(m, portid);
+				port_knock_simple_forward(m, portid, state_map);
 			}
 		}
 		/* >8 End of read packet from RX queues. */

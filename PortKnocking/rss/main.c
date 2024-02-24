@@ -140,16 +140,16 @@ enum port_list{
 /*
  * ethdev
  */
-#ifndef ETHDEV_RXQ_RSS_MAX
-#define ETHDEV_RXQ_RSS_MAX 16
-#endif
+// #ifndef ETHDEV_RXQ_RSS_MAX
+// #define ETHDEV_RXQ_RSS_MAX 16
+// #endif
 
-struct ethdev_params_rss {
-	uint32_t queue_id[ETHDEV_RXQ_RSS_MAX];
-	uint32_t n_queues;
-};
+// struct ethdev_params_rss {
+// 	uint32_t queue_id[ETHDEV_RXQ_RSS_MAX];
+// 	uint32_t n_queues;
+// };
 
-#define RETA_CONF_SIZE     (RTE_ETH_RSS_RETA_SIZE_512 / RTE_ETH_RETA_GROUP_SIZE)
+// #define RETA_CONF_SIZE     (RTE_ETH_RSS_RETA_SIZE_512 / RTE_ETH_RETA_GROUP_SIZE)
 
 
 struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
@@ -364,7 +364,7 @@ l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, str
 
 	if (mac_updating)
 		l2fwd_mac_updating(m, dst_port);
-	// port_knocking_parse_ipv4(m, lcore_id, state_map);
+	port_knocking_parse_ipv4(m, lcore_id, state_map);
 	// buffer = tx_buffer[dst_port];
 	buffer = tx_buffer[lcore_id];
 	sent = rte_eth_tx_buffer(dst_port, lcore_id, buffer, m);
