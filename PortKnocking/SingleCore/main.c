@@ -185,11 +185,11 @@ print_stats(void)
 		prev_total_packets_tx += prev_tx;
 
 		printf("\nStatistics for lcore %u ------------------------------"
-			"\nPackets sent: %24"PRIu64
-			"\nPackets received: %20"PRIu64
-			"\nPackets dropped: %21"PRIu64
-			"\ntx MPPS: %29"PRIu64
-			"\nrx MPPS: %29"PRIu64,
+			"\nTotal Packets sent: %18"PRIu64
+			"\nTotal Packets received: %14"PRIu64
+			"\nTotal Packets dropped: %15"PRIu64
+			"\nCurrent TX rate (PPS): %15"PRIu64
+			"\nCurrent RX rate (PPS): %15"PRIu64,
 			portid,
 			port_statistics[portid].tx,
 			port_statistics[portid].rx,
@@ -208,12 +208,10 @@ print_stats(void)
 		   "\nTotal packets sent: %18"PRIu64
 		   "\nTotal packets received: %14"PRIu64
 		   "\nTotal packets dropped: %15"PRIu64
-		   "\nTotal packets tx: %20"PRIu64
-		   "\nTotal packets rx: %20"PRIu64
-		   "\n\nTotal Successfully rx pkt: %11"PRIu64
-		   "\nTotal Successfully tx pkt: %11"PRIu64
-		   "\nTotal Successfully rx byt: %11"PRIu64
-		   "\nTotal Successfully tx byt: %11"PRIu64
+		   "\nTotal TX rate (PPS): %17"PRIu64
+		   "\nTotal RX rate (PPS): %17"PRIu64
+		   "\nTotal TX bytes rate: %17"PRIu64
+		   "\nTotal RX bytes rate: %17"PRIu64
 		   "\nTotal rx H/w drops: %18"PRIu64
 		   "\nTotal error pkt: %21"PRIu64
 		   "\nTotal failed transmission: %11"PRIu64
@@ -223,14 +221,12 @@ print_stats(void)
 		   total_packets_dropped,
 		    prev_total_packets_tx/timer_in_sec,
 		    prev_total_packets_rx/timer_in_sec,
-			eth_stats.ipackets - old_eth_stats.ipackets,
-			eth_stats.opackets - old_eth_stats.opackets,
-			eth_stats.ibytes - old_eth_stats.ibytes,
 			eth_stats.obytes - old_eth_stats.obytes,
-			eth_stats.imissed - old_eth_stats.imissed,
-			eth_stats.ierrors - old_eth_stats.ierrors,
-			eth_stats.oerrors - old_eth_stats.oerrors,
-			eth_stats.rx_nombuf - old_eth_stats.rx_nombuf);
+			eth_stats.ibytes - old_eth_stats.ibytes,
+			eth_stats.imissed,
+			eth_stats.ierrors,
+			eth_stats.oerrors,
+			eth_stats.rx_nombuf);
 	printf("\n====================================================\n");
 	rte_memcpy(&old_eth_stats, &eth_stats, sizeof(struct rte_eth_stats));
 	fflush(stdout);
