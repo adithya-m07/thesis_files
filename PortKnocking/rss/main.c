@@ -220,10 +220,10 @@ print_stats(void)
 			"\nTotal Packets dropped: %15"PRIu64
 			"\nCurrent TX rate (PPS): %15"PRIu64
 			"\nCurrent RX rate (PPS): %15"PRIu64,
-			portid,
-			port_statistics[portid].tx,
-			port_statistics[portid].rx,
-			port_statistics[portid].dropped,
+			i,
+			port_statistics[i].tx,
+			port_statistics[i].rx,
+			port_statistics[i].dropped,
 			(prev_tx)/ timer_in_sec,
 			(prev_rx)/ timer_in_sec);
 		} 

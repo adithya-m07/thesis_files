@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 2
+#define NUM_LCORES_FOR_RSS 14
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 512
@@ -180,7 +180,7 @@ struct rte_eth_stats old_eth_stats;
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 0; /* default period is 10 seconds */
+static uint64_t timer_period = 1; /* default period is 10 seconds */
 
 /* Print out statistics on packets dropped */
 static void
@@ -232,10 +232,10 @@ print_stats(void)
 			"\nTotal Packets dropped: %15"PRIu64
 			"\nCurrent TX rate (PPS): %15"PRIu64
 			"\nCurrent RX rate (PPS): %15"PRIu64,
-			portid,
-			port_statistics[portid].tx,
-			port_statistics[portid].rx,
-			port_statistics[portid].dropped,
+			i,
+			port_statistics[i].tx,
+			port_statistics[i].rx,
+			port_statistics[i].dropped,
 			(prev_tx)/ timer_in_sec,
 			(prev_rx)/ timer_in_sec);
 		} 
@@ -326,7 +326,7 @@ lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_h
 	// struct in_addr ip_addr;
 	// ip_addr.s_addr = src_ip;
 	// RTE_LOG(INFO, L2FWD,"2LCOREID: %u, src_ip %s\n", lcore_id, inet_ntoa(ip_addr));
-	printf("LCORE %d\n", lcore_id);
+	// printf("LCORE %d\n", lcore_id);
 	enum state pkt_state;
 	int ret = rte_hash_lookup_data(state_map, &src_ip, (void**)&pkt_state);
 	if(ret == -ENOENT){
@@ -337,19 +337,19 @@ lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_h
 	}
 
 	if(dst_port == PORT_0 && pkt_state == CLOSED_0){
-		printf("CLOSED_1\n");
+		// printf("CLOSED_1\n");
 		pkt_state = CLOSED_1;
 	}
 	else if(dst_port == PORT_1 && pkt_state == CLOSED_1){
-		printf("CLOSED_2\n");
+		// printf("CLOSED_2\n");
 		pkt_state = CLOSED_2;
 	}
 	else if(dst_port == PORT_2 && pkt_state == CLOSED_2){
-		printf("OPEN\n");
+		// printf("OPEN\n");
 		pkt_state = OPEN;
 	}
 	else{
-		printf("CLOSED_0\n");
+		// printf("CLOSED_0\n");
 		pkt_state = CLOSED_0;
 	}
 	rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
