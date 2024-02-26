@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 4
+#define NUM_LCORES_FOR_RSS 3
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 2048
@@ -132,9 +132,9 @@ enum port_list{
 	PORT_2
 };
 
+FILE *log_file;
 
-
-
+#define WRITE_INTO_FILE 1
 
 
 /*
@@ -161,6 +161,7 @@ struct l2fwd_port_statistics {
 	uint64_t rx;
 	uint64_t prev_rx;
 	uint64_t dropped;
+	uint64_t prev_dropped;
 } __rte_cache_aligned;
 struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 struct rte_eth_stats old_eth_stats;
@@ -261,6 +262,73 @@ print_stats(void)
 	rte_memcpy(&old_eth_stats, &eth_stats, sizeof(struct rte_eth_stats));
 	fflush(stdout);
 }
+
+static void
+write_stats(void)
+{
+	uint64_t total_packets_dropped, total_packets_tx, total_packets_rx, prev_total_packets_dropped, prev_total_packets_tx, prev_total_packets_rx, prev_dropped;
+	uint64_t timer_in_sec = timer_period/rte_get_timer_hz();
+	struct rte_eth_stats eth_stats;
+	unsigned portid;
+	int ret;
+
+
+	total_packets_dropped = 0;
+	total_packets_tx = 0;
+	total_packets_rx = 0;
+	prev_total_packets_rx = 0;
+	prev_total_packets_tx = 0;
+	prev_total_packets_dropped = 0;
+
+	for (portid = 0; portid < RTE_MAX_ETHPORTS; portid++) {
+		/* skip disabled ports */
+		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
+			continue;
+		unsigned tx = 0, rx = 0, dropped = 0, prev_tx = 0, prev_rx = 0;
+		for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
+			tx += port_statistics[i].tx;
+			rx += port_statistics[i].rx;
+			dropped += port_statistics[i].dropped;
+
+			prev_tx = port_statistics[i].tx - port_statistics[i].prev_tx;
+			port_statistics[i].prev_tx = port_statistics[i].tx;
+
+			prev_rx = port_statistics[i].rx - port_statistics[i].prev_rx;
+			port_statistics[i].prev_rx = port_statistics[i].rx;
+
+			prev_dropped = port_statistics[i].dropped - port_statistics[i].prev_dropped;
+			port_statistics[i].prev_dropped = port_statistics[i].dropped;
+
+			prev_total_packets_rx += prev_rx;
+			prev_total_packets_tx += prev_tx;
+			prev_total_packets_dropped += prev_dropped;
+
+			fprintf(log_file,"%"PRIu64",%"PRIu64",%"PRIu64",,",
+			prev_tx/ timer_in_sec,
+			prev_rx/ timer_in_sec,
+			prev_dropped/timer_in_sec);
+		} 
+		total_packets_dropped += dropped;
+		total_packets_tx += tx;
+		total_packets_rx += rx;
+	}
+	// TODO: Update get port statistics to ensure that it
+	// supports printing stats for multiple ports
+	ret = rte_eth_stats_get(0, &eth_stats);
+	fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",\n",
+		    prev_total_packets_tx/timer_in_sec,
+		    prev_total_packets_rx/timer_in_sec,
+			prev_total_packets_dropped/timer_in_sec,
+			eth_stats.obytes - old_eth_stats.obytes,
+			eth_stats.ibytes - old_eth_stats.ibytes,
+			eth_stats.imissed - old_eth_stats.imissed,
+			eth_stats.ierrors - old_eth_stats.ierrors,
+			eth_stats.oerrors - old_eth_stats.oerrors,
+			eth_stats.rx_nombuf - old_eth_stats.rx_nombuf);
+	rte_memcpy(&old_eth_stats, &eth_stats, sizeof(struct rte_eth_stats));
+	fflush(log_file);
+}
+
 
 static inline void 
 lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map)
@@ -461,7 +529,10 @@ l2fwd_main_loop(void)
 
 					/* do this only on main core */
 					if (lcore_id == rte_get_main_lcore()) {
-						print_stats();
+						if(WRITE_INTO_FILE)
+							write_stats();
+						else
+							print_stats();
 						/* reset the timer */
 						timer_tsc = 0;
 					}
@@ -1154,6 +1225,25 @@ main(int argc, char **argv)
 		if(ret < 0)
 			rte_exit(EXIT_FAILURE, "rte_eth_stats_reset: err=%s, port=%u\n", 
 			rte_strerror(-ret), portid);
+		
+		// Create a file to write stats into
+		if(WRITE_INTO_FILE){
+			char name_buffer[50];
+			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_rss_%"PRIu64".csv", NUM_LCORES_FOR_RSS, rte_rdtsc());
+			log_file = fopen(name_buffer, "w");
+			uint8_t i;
+			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
+				fprintf(log_file, "Lcore %u,,,,",i);
+			}
+			fprintf(log_file, "Aggregate statistics,,,,,,,,,,\n");
+			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
+				fprintf(log_file, "Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,");
+			}
+			fprintf(log_file, "Total TX rate (PPS),Total RX rate (PPS),Total Drop rate (PPS),"
+				"Total TX bytes rate,Total RX bytes rate,Total rx H/w drops rate,Total error pkt rate,"
+				"Total failed transmission rate,Total rx mbuf failure rate\n");
+			fflush(log_file);
+		}
 	}
 
 	if (!nb_ports_available) {
@@ -1174,6 +1264,9 @@ main(int argc, char **argv)
 	}
 
 	RTE_ETH_FOREACH_DEV(portid) {
+		// Close filepointer
+		if(WRITE_INTO_FILE)
+			fclose(log_file);
 		if ((l2fwd_enabled_port_mask & (1 << portid)) == 0)
 			continue;
 		printf("Closing port %d...", portid);
