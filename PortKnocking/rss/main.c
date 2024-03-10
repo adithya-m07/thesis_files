@@ -61,8 +61,8 @@ static int promiscuous_on;
 /*
  * Configurable number of RX/TX ring descriptors
  */
-#define RX_DESC_DEFAULT 1024
-#define TX_DESC_DEFAULT 1024
+#define RX_DESC_DEFAULT 8192
+#define TX_DESC_DEFAULT 8192
 static uint16_t nb_rxd = RX_DESC_DEFAULT;
 static uint16_t nb_txd = TX_DESC_DEFAULT;
 
@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 3
+#define NUM_LCORES_FOR_RSS 5
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 2048
@@ -134,7 +134,7 @@ enum port_list{
 
 FILE *log_file;
 
-#define WRITE_INTO_FILE 1
+#define WRITE_INTO_FILE 0
 
 
 /*
