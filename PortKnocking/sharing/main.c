@@ -115,10 +115,10 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 4
+#define NUM_LCORES_FOR_RSS 5
 
 // Port Knocking DS
-#define MAX_IPV4_5TUPLES 2048
+#define MAX_IPV4_5TUPLES 1024
 enum state {
   CLOSED_0 = 0,
   CLOSED_1,
@@ -134,7 +134,7 @@ enum port_list{
 
 FILE *log_file;
 
-#define WRITE_INTO_FILE 0
+#define WRITE_INTO_FILE 1
 
 struct rte_hash *state_map;
 rte_rwlock_t rw_lock = RTE_RWLOCK_INITIALIZER;
@@ -1231,7 +1231,7 @@ main(int argc, char **argv)
 		// Create a file to write stats into
 		if(WRITE_INTO_FILE){
 			char name_buffer[50];
-			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_rss_%"PRIu64".csv", NUM_LCORES_FOR_RSS, rte_rdtsc());
+			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_shared_%"PRIu64".csv", NUM_LCORES_FOR_RSS, rte_rdtsc());
 			log_file = fopen(name_buffer, "w");
 			uint8_t i;
 			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){

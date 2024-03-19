@@ -115,10 +115,10 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 5
+#define NUM_LCORES_FOR_RSS 6
 
 // Port Knocking DS
-#define MAX_IPV4_5TUPLES 2048
+#define MAX_IPV4_5TUPLES 1024
 enum state {
   CLOSED_0 = 0,
   CLOSED_1,
@@ -341,7 +341,7 @@ lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_h
 	else if(ret < 0){
 		rte_exit(EXIT_FAILURE, "State Table Invalid Parameters %d\n", ret);
 	}
-
+	// printf("LCORE %u\t", lcore_id);
 	if(dst_port == PORT_0 && pkt_state == CLOSED_0){
 		// printf("CLOSED_1\n");
 		pkt_state = CLOSED_1;
@@ -1092,7 +1092,7 @@ main(int argc, char **argv)
 
 		// Setting up RSS
 		printf("\nPort Info, reta %d, max_rx %d, rss_offload %lx\n", dev_info.reta_size, dev_info.max_rx_queues, dev_info.flow_type_rss_offloads);
-		uint64_t rss_hf = RTE_ETH_RSS_IP;
+		uint64_t rss_hf = RTE_ETH_RSS_IP | RTE_ETH_RSS_L3_SRC_ONLY;
 		local_port_conf.rx_adv_conf.rss_conf.rss_hf = rss_hf & dev_info.flow_type_rss_offloads;
 		if(local_port_conf.rx_adv_conf.rss_conf.rss_hf == 0){
 			printf("\nIncompatible Hash Function\n");

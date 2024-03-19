@@ -1,4 +1,0 @@
-Lcore 0,,,,Lcore 1,,,,Lcore 2,,,,Lcore 3,,,,Lcore 4,,,,Aggregate statistics,,,,,,,,,,
-Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,Current TX rate (PPS),Current RX rate (PPS),Current Drop rate (PPS),,Total TX rate (PPS),Total RX rate (PPS),Total Drop rate (PPS),Total TX bytes rate,Total RX bytes rate,Total rx H/w drops rate,Total error pkt rate,Total failed transmission rate,Total rx mbuf failure rate
-0,0,0,,0,0,0,,0,0,0,,0,0,0,,0,0,0,,0,0,0,0,0,0,0,0,0,
-0,0,0,,0,0,0,,0,0,0,,0,0,0,,0,0,0,,0,0,0,0,0,0,0,0,0,
