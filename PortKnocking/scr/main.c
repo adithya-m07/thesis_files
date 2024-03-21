@@ -138,15 +138,15 @@ FILE *log_file;
 
 // Metadata element for SCR
 struct metadata_elem{
-	uint16_t ethtype;
-	uint8_t proto;
+	// uint16_t ethtype;
+	// uint8_t proto;
 	uint32_t src_ip;
 	uint16_t dst_port;
 	bool tcp_syn_flag;
 	bool tcp_fin_flag;
 }__rte_packed;
 // (Packed as this will be transfered over the network and adding padding is unecessary)
-
+int ctr = 0;
 
 #define NUM_PKTS_SCR NUM_LCORES_FOR_RSS
 
@@ -420,7 +420,7 @@ lookup_state(uint16_t dst_port, enum state *pkt_state)
 }
 
 static void 
-port_knocking_parse_ipv4(struct rte_mbuf *m, enum state *pkt_state, uint32_t *src_ip)
+port_knocking_parse_ipv4(struct rte_mbuf *m, enum state *pkt_state, uint32_t *src_ip, bool *tcp_fin_flag)
 {
 	struct rte_ipv4_hdr *iphdr;
 	// rte_be32_t src_ip; 
@@ -440,13 +440,14 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, enum state *pkt_state, uint32_t *sr
 		tcp = (struct rte_tcp_hdr *)((unsigned char *)iphdr +
 					sizeof(struct rte_ipv4_hdr));
 		dst_port = rte_be_to_cpu_16(tcp->dst_port);
+		*tcp_fin_flag = (tcp->tcp_flags & RTE_TCP_FIN_FLAG != 0);
 		break;
 
-	case IPPROTO_UDP:
-		udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
-					sizeof(struct rte_ipv4_hdr));
-		dst_port = rte_be_to_cpu_16(udp->dst_port);
-		break;
+	// case IPPROTO_UDP:
+	// 	udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
+	// 				sizeof(struct rte_ipv4_hdr));
+	// 	dst_port = rte_be_to_cpu_16(udp->dst_port);
+	// 	break;
 
 	default:
 		dst_port = 0;
@@ -462,6 +463,7 @@ scr_state_update(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, struct 
 	// Adjust offset by changing m->data_off
 	uint32_t src_ip;
 	uint16_t dst_port;
+	bool tcp_fin_flag = false;
 	// struct rte_ether_hdr *eth;
 	// eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 	// printf("1 MAC address: " RTE_ETHER_ADDR_PRT_FMT "\n\n",
@@ -480,24 +482,27 @@ scr_state_update(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, struct 
 	}
 	if (md_start + md_size > md_start + m->data_len){
 		// RTE_LOG(INFO, L2FWD,"1LCOREID: %u\n", lcore_id);
-		port_knocking_parse_ipv4(m, &pkt_state, &src_ip);
+		port_knocking_parse_ipv4(m, &pkt_state, &src_ip, &tcp_fin_flag);
 	}
 	else{
 		// TODO: Check if new session table is required
 		enum state curr_state;
 		struct metadata_elem *md_elem;
 		md_elem = rte_pktmbuf_mtod_offset(m, void *, sizeof(struct metadata_elem)) ;
-		src_ip = md_elem->src_ip;
 
 		for(int i = 0; i < NUM_PKTS_SCR - 1; i++){
 			md_elem = rte_pktmbuf_mtod_offset(m, void *,i * sizeof(struct metadata_elem)) ;
 			src_ip = md_elem->src_ip;
 			dst_port = md_elem->dst_port;
+			tcp_fin_flag = md_elem->tcp_fin_flag;
 			// struct in_addr ip_addr;
 			// ip_addr.s_addr = src_ip;
 			// RTE_LOG(INFO, L2FWD,"2LCOREID: %u, src_ip %s\n", lcore_id, inet_ntoa(ip_addr));
-
+			
 			lookup_state(dst_port, &pkt_state);
+			if(tcp_fin_flag){
+				rte_hash_del_key(state_map, &src_ip);
+			}
 		}
 		if(rte_pktmbuf_adj(m, md_size) == NULL)
 			RTE_LOG(INFO, L2FWD, "Failed to fix mbuf\n");
@@ -505,12 +510,17 @@ scr_state_update(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, struct 
 		// eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 		// printf("2 MAC address: " RTE_ETHER_ADDR_PRT_FMT "\n\n",
 		// 	RTE_ETHER_ADDR_BYTES(&eth->src_addr));
-		port_knocking_parse_ipv4(m, &pkt_state, &src_ip);
+		port_knocking_parse_ipv4(m, &pkt_state, &src_ip, &tcp_fin_flag);
 	}
 	// Assume that for a given packet, irrespective of state update, the src ip will 
 	// remain constant
 	// printf("Lcores %d\n", lcore_id);
-	rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	if(tcp_fin_flag){
+		rte_hash_del_key(state_map, &src_ip);
+	}
+	else{
+		rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	}
 }
 
 static void
