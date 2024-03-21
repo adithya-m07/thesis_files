@@ -331,7 +331,7 @@ write_stats(void)
 
 
 static inline void 
-lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map)
+lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map, bool tcp_fin_flag)
 {
 	enum state pkt_state;
 	int ret = rte_hash_lookup_data(state_map, &src_ip, (void**)&pkt_state);
@@ -358,7 +358,12 @@ lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_h
 		// printf("CLOSED_0\n");
 		pkt_state = CLOSED_0;
 	}
-	rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	if(tcp_fin_flag){
+		rte_hash_del_key(state_map, &src_ip);
+	}
+	else{
+		rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	}
 }
 
 static void 
@@ -370,6 +375,7 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, unsigned lcore_id, struct rte_hash 
 	uint16_t dst_port;
 	struct rte_udp_hdr *udp;
 	struct rte_tcp_hdr *tcp;
+	bool tcp_fin_flag;
 	/* Remove the Ethernet header from the input packet. 8< */
 	// iphdr = (struct rte_ipv4_hdr *) rte_pktmbuf_adj(m, (uint16_t)sizeof(struct rte_ether_hdr));
 	iphdr = (struct rte_ipv4_hdr *) (rte_pktmbuf_mtod(m, void *) + (uint16_t)sizeof(struct rte_ether_hdr));
@@ -383,20 +389,22 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, unsigned lcore_id, struct rte_hash 
 		tcp = (struct rte_tcp_hdr *)((unsigned char *)iphdr +
 					sizeof(struct rte_ipv4_hdr));
 		dst_port = rte_be_to_cpu_16(tcp->dst_port);
+		tcp_fin_flag = (tcp->tcp_flags & RTE_TCP_FIN_FLAG != 0); 
 		break;
 
-	case IPPROTO_UDP:
-		udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
-					sizeof(struct rte_ipv4_hdr));
-		dst_port = rte_be_to_cpu_16(udp->dst_port);
-		break;
+
+	// case IPPROTO_UDP:
+	// 	udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
+	// 				sizeof(struct rte_ipv4_hdr));
+	// 	dst_port = rte_be_to_cpu_16(udp->dst_port);
+	// 	break;
 
 	default:
 		dst_port = 0;
 		break;
 	}
 
-	lookup_state(src_ip, dst_port, lcore_id, state_map);
+	lookup_state(src_ip, dst_port, lcore_id, state_map, tcp_fin_flag);
 }
 
 static void
