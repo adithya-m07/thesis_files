@@ -2,6 +2,7 @@
  * Copyright(c) 2010-2016 Intel Corporation
  */
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -100,22 +101,22 @@ static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
 
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
-		.mq_mode = RTE_ETH_MQ_RX_RSS
+		.mq_mode = RTE_ETH_MQ_RX_NONE
 	},
-	.rx_adv_conf = {
-		.rss_conf = {
-			.rss_key = NULL,
-			.rss_key_len = 40,
-			.rss_hf = 0,
-		},
-	},
+	// .rx_adv_conf = {
+	// 	.rss_conf = {
+	// 		.rss_key = NULL,
+	// 		.rss_key_len = 40,
+	// 		.rss_hf = 0,
+	// 	},
+	// },
 	.txmode = {
 		.mq_mode = RTE_ETH_MQ_TX_NONE,
 	},
 	
 };
 
-#define NUM_LCORES_FOR_RSS 5
+#define NUM_LCORES_FOR_RSS 4
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 1024
@@ -134,7 +135,7 @@ enum port_list{
 
 FILE *log_file;
 
-#define WRITE_INTO_FILE 1
+#define WRITE_INTO_FILE 0
 
 struct rte_hash *state_map;
 rte_rwlock_t rw_lock = RTE_RWLOCK_INITIALIZER;
@@ -152,6 +153,9 @@ rte_rwlock_t rw_lock = RTE_RWLOCK_INITIALIZER;
 
 // #define RETA_CONF_SIZE     (RTE_ETH_RSS_RETA_SIZE_512 / RTE_ETH_RETA_GROUP_SIZE)
 
+
+uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][64];
+uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][64];
 
 struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
 
@@ -331,8 +335,56 @@ write_stats(void)
 }
 
 
+static void
+create_src_mac_flow(uint16_t portid)
+{
+	struct rte_flow_action action[2];
+	struct rte_flow_item pattern[2];
+	struct rte_flow_attr attr = {.ingress = 1, .egress = 0};
+	struct rte_flow_error err;
+	struct rte_flow_item_eth eth;
+	struct rte_flow_action_queue queue;
+	struct rte_flow *flow;
+	void *tmp;
+	int ret;
+	static const struct rte_flow_item_eth eth_mask = {
+        .hdr.dst_addr.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+        .hdr.src_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+        .hdr.ether_type = RTE_BE16(0x0000),
+    };
+	attr.group = 0;
+	uint16_t i;
+	action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+	action[0].conf = &queue;
+	action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+	pattern[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+	pattern[0].spec = &eth;
+	pattern[0].mask = &eth_mask;
+	pattern[0].last = NULL;
+	pattern[1].type = RTE_FLOW_ITEM_TYPE_END;
+	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
+		tmp = &eth.hdr.src_addr;
+		*((uint64_t *)tmp) = 0x001010101010 + ((uint64_t)i << 40);
+		queue.index = i;
+		printf("MAC address: " RTE_ETHER_ADDR_PRT_FMT "\n\n",
+			RTE_ETHER_ADDR_BYTES(&eth.hdr.src_addr));
+
+		ret = rte_flow_validate(portid, &attr, pattern, action, &err);
+		if(ret){
+			rte_exit(EXIT_FAILURE, "Invalid Flow %d %d\n", i, err.type);
+		}
+		flow = rte_flow_create(portid, &attr, pattern, action, &err);
+		if(flow == NULL){
+			rte_exit(EXIT_FAILURE, "Unable to create flow\n");
+		}
+	}
+}
+
+
+
 static inline void 
-lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map)
+lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map, bool tcp_fin_flag)
 {
 	enum state pkt_state;
 	rte_rwlock_read_lock(&rw_lock);
@@ -362,7 +414,12 @@ lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_h
 		pkt_state = CLOSED_0;
 	}
 	rte_rwlock_write_lock(&rw_lock);
-	rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	if(tcp_fin_flag){
+		rte_hash_del_key(state_map, &src_ip);
+	}
+	else{
+		rte_hash_add_key_data(state_map, &src_ip, (void *)pkt_state);
+	}
 	rte_rwlock_write_unlock(&rw_lock);
 }
 
@@ -371,6 +428,7 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, unsigned lcore_id)
 {
 	struct rte_ipv4_hdr *iphdr;
 	uint32_t src_ip;
+	bool tcp_fin_flag;
 	// rte_be32_t src_ip; 
 	uint16_t dst_port;
 	struct rte_udp_hdr *udp;
@@ -388,20 +446,21 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, unsigned lcore_id)
 		tcp = (struct rte_tcp_hdr *)((unsigned char *)iphdr +
 					sizeof(struct rte_ipv4_hdr));
 		dst_port = rte_be_to_cpu_16(tcp->dst_port);
+		tcp_fin_flag = (tcp->tcp_flags & RTE_TCP_FIN_FLAG != 0); 
 		break;
 
-	case IPPROTO_UDP:
-		udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
-					sizeof(struct rte_ipv4_hdr));
-		dst_port = rte_be_to_cpu_16(udp->dst_port);
-		break;
+	// case IPPROTO_UDP:
+	// 	udp = (struct rte_udp_hdr *)((unsigned char *)iphdr +
+	// 				sizeof(struct rte_ipv4_hdr));
+	// 	dst_port = rte_be_to_cpu_16(udp->dst_port);
+	// 	break;
 
 	default:
 		dst_port = 0;
 		break;
 	}
 
-	lookup_state(src_ip, dst_port, lcore_id, state_map);
+	lookup_state(src_ip, dst_port, lcore_id, state_map, tcp_fin_flag);
 }
 
 static void
@@ -451,8 +510,8 @@ l2fwd_main_loop(void)
 	struct rte_mbuf *m;
 	int sent;
 	unsigned lcore_id;
-	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
-	unsigned i, j, portid, nb_rx;
+	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc, rx_burst_start_tsc, rx_burst_end_tsc;
+	unsigned i, j, portid, nb_rx, tempi;
 	struct lcore_queue_conf *qconf;
 	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S *
 			BURST_TX_DRAIN_US;
@@ -461,6 +520,11 @@ l2fwd_main_loop(void)
 	
 	prev_tsc = 0;
 	timer_tsc = 0;
+
+	rx_burst_start_tsc = 0;
+	rx_burst_end_tsc = 0;
+	tempi = 0;
+
 
 	lcore_id = rte_lcore_id();
 	qconf = &lcore_queue_conf[lcore_id];
@@ -550,6 +614,9 @@ l2fwd_main_loop(void)
 			if (unlikely(nb_rx == 0))
 				continue;
 
+			rx_burst_start_tsc = rte_rdtsc();
+			tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
+
 			// port_statistics[portid].rx += nb_rx;
 			port_statistics[lcore_id].rx += nb_rx;
 
@@ -559,6 +626,10 @@ l2fwd_main_loop(void)
 				// l2fwd_simple_forward(m, portid, lcore_id);
 				l2fwd_simple_forward(m, portid, lcore_id);
 			}
+			rx_burst_end_tsc = rte_rdtsc();
+			// printf("Lcore id %u, tempi %u", lcore_id, tempi);
+			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
+			tempi = tempi == 63 ? 0: tempi+1;
 		}
 		/* >8 End of read packet from RX queues. */
 	}
@@ -1093,12 +1164,12 @@ main(int argc, char **argv)
 
 
 		// Setting up RSS
-		printf("\nPort Info, reta %d, max_rx %d, rss_offload %lx\n", dev_info.reta_size, dev_info.max_rx_queues, dev_info.flow_type_rss_offloads);
-		uint64_t rss_hf = RTE_ETH_RSS_IP;
-		local_port_conf.rx_adv_conf.rss_conf.rss_hf = rss_hf & dev_info.flow_type_rss_offloads;
-		if(local_port_conf.rx_adv_conf.rss_conf.rss_hf == 0){
-			printf("\nIncompatible Hash Function\n");
-		}
+		// printf("\nPort Info, reta %d, max_rx %d, rss_offload %lx\n", dev_info.reta_size, dev_info.max_rx_queues, dev_info.flow_type_rss_offloads);
+		// uint64_t rss_hf = RTE_ETH_RSS_IP;
+		// local_port_conf.rx_adv_conf.rss_conf.rss_hf = rss_hf & dev_info.flow_type_rss_offloads;
+		// if(local_port_conf.rx_adv_conf.rss_conf.rss_hf == 0){
+		// 	printf("\nIncompatible Hash Function\n");
+		// }
 
 		/* Configure the number of queues for a port. */
 		// RSS
@@ -1228,10 +1299,13 @@ main(int argc, char **argv)
 			rte_exit(EXIT_FAILURE, "rte_eth_stats_reset: err=%s, port=%u\n", 
 			rte_strerror(-ret), portid);
 		
+		// Create flow
+		create_src_mac_flow(portid);
+		
 		// Create a file to write stats into
 		if(WRITE_INTO_FILE){
 			char name_buffer[50];
-			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_shared_%"PRIu64".csv", NUM_LCORES_FOR_RSS, rte_rdtsc());
+			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_portknock_shared_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((rte_rdtsc() & (uint64_t) 0xFFFFFFFF00000000) >> 32));
 			log_file = fopen(name_buffer, "w");
 			uint8_t i;
 			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
@@ -1278,6 +1352,25 @@ main(int argc, char **argv)
 			       ret, portid);
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
+	}
+
+	printf("Latency Stats");
+	for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
+		uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
+		printf("\n\nCore %d\n", i);
+		for(int j = 0; j < 64; j++){
+			curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+			min_btw = RTE_MIN(min_btw, curr_btw);
+			max_btw = RTE_MAX(max_btw, curr_btw);
+			avg_btw += curr_btw;
+			
+			curr_proc = tsc_process_burst_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+			min_proc = RTE_MIN(curr_proc, min_proc);
+			max_proc = RTE_MAX(curr_proc, max_proc);
+			avg_proc += curr_proc;
+		}
+		printf("Time Between Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_btw, max_btw, avg_btw/64);
+		printf("Time to Process Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_proc, max_proc, avg_proc/64);
 	}
 
 	/* clean up the EAL */
