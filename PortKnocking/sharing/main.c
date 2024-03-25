@@ -384,7 +384,7 @@ create_src_mac_flow(uint16_t portid)
 
 
 static inline void 
-lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, struct rte_hash *state_map, bool tcp_fin_flag)
+lookup_state(uint32_t src_ip, uint16_t dst_port, unsigned lcore_id, bool tcp_fin_flag)
 {
 	enum state pkt_state;
 	rte_rwlock_read_lock(&rw_lock);
@@ -460,7 +460,7 @@ port_knocking_parse_ipv4(struct rte_mbuf *m, unsigned lcore_id)
 		break;
 	}
 
-	lookup_state(src_ip, dst_port, lcore_id, state_map, tcp_fin_flag);
+	lookup_state(src_ip, dst_port, lcore_id, tcp_fin_flag);
 }
 
 static void
