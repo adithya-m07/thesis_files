@@ -117,7 +117,7 @@ static struct rte_eth_conf port_conf = {
 };
 
 #define NUM_LCORES_FOR_RSS 7
-
+#define USING_TRACE 1
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 1024
 enum state {
@@ -135,7 +135,7 @@ enum port_list{
 
 FILE *log_file;
 
-#define WRITE_INTO_FILE 0
+#define WRITE_INTO_FILE 1
 
 struct rte_hash *state_map;
 rte_rwlock_t rw_lock = RTE_RWLOCK_INITIALIZER;
@@ -153,9 +153,10 @@ rte_rwlock_t rw_lock = RTE_RWLOCK_INITIALIZER;
 
 // #define RETA_CONF_SIZE     (RTE_ETH_RSS_RETA_SIZE_512 / RTE_ETH_RETA_GROUP_SIZE)
 
-
-uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][64];
-uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][64];
+#define LATENCY_SAMPLE_SIZE 64
+uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
+uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
+uint64_t burst_size[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 
 struct rte_mempool * l2fwd_pktmbuf_pool = NULL;
 
@@ -474,7 +475,10 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 	/* 02:00:00:00:00:xx */
 	// tmp = &eth->dst_addr.addr_bytes[0];
 	// *((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
-	rte_ether_addr_copy(&eth->src_addr, &eth->dst_addr);
+	// rte_ether_addr_copy(&eth->src_addr, &eth->dst_addr);
+	if(USING_TRACE){
+		*(uint64_t*) (&eth->dst_addr.addr_bytes[0]) = 0x9e0813d23fb8;
+	}
 	/* src addr */
 	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
 }
@@ -613,7 +617,7 @@ l2fwd_main_loop(void)
 
 			if (unlikely(nb_rx == 0))
 				continue;
-
+			burst_size[lcore_id][tempi] = nb_rx;
 			rx_burst_start_tsc = rte_rdtsc();
 			tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
 
@@ -629,7 +633,7 @@ l2fwd_main_loop(void)
 			rx_burst_end_tsc = rte_rdtsc();
 			// printf("Lcore id %u, tempi %u", lcore_id, tempi);
 			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
-			tempi = tempi+1 % 64;
+			tempi = (tempi+1) % LATENCY_SAMPLE_SIZE;
 		}
 		/* >8 End of read packet from RX queues. */
 	}
@@ -991,12 +995,13 @@ main(int argc, char **argv)
 	uint16_t nb_ports;
 	uint16_t nb_ports_available = 0;
 	uint16_t portid, last_port;
+	uint64_t start_tsc_for_file;
 	unsigned lcore_id, rx_lcore_id;
 	unsigned nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
 
-
+	start_tsc_for_file = rte_rdtsc();
 
 	/* Init EAL. 8< */
 	ret = rte_eal_init(argc, argv);
@@ -1304,8 +1309,8 @@ main(int argc, char **argv)
 		
 		// Create a file to write stats into
 		if(WRITE_INTO_FILE){
-			char name_buffer[50];
-			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_portknock_shared_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((rte_rdtsc() & (uint64_t) 0xFFFFFFFF00000000) >> 32));
+			char name_buffer[100];
+			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_portknock_shared_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((start_tsc_for_file & (uint64_t) 0xFFFFFFFF00000000) >> 32));
 			log_file = fopen(name_buffer, "w");
 			uint8_t i;
 			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
@@ -1354,24 +1359,46 @@ main(int argc, char **argv)
 		printf(" Done\n");
 	}
 
-	printf("Latency Stats");
-	for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
-		printf("\n\nCore %d\n", i);
-		for(int j = 0; j < 64; j++){
-			curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
-			min_btw = RTE_MIN(min_btw, curr_btw);
-			max_btw = RTE_MAX(max_btw, curr_btw);
-			avg_btw += curr_btw;
-			
-			curr_proc = tsc_process_burst_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
-			min_proc = RTE_MIN(curr_proc, min_proc);
-			max_proc = RTE_MAX(curr_proc, max_proc);
-			avg_proc += curr_proc;
-		}
-		printf("Time Between Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_btw, max_btw, avg_btw/64);
-		printf("Time to Process Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_proc, max_proc, avg_proc/64);
+	char name_buffer[100];
+	snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_portknock_shared_latency_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((start_tsc_for_file & (uint64_t) 0xFFFFFFFF00000000) >> 32));
+	log_file = fopen(name_buffer, "w");
+	uint8_t i;
+	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
+		fprintf(log_file, "core %u,core %u,core %u,",i,i,i);
 	}
+	fprintf(log_file, "\n");
+	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
+		fprintf(log_file, "Time Between Bursts, Time to Process Burst, Burst Size,");
+	}
+	fprintf(log_file, "\n");
+	for(i = 0; i < LATENCY_SAMPLE_SIZE; i++){
+		for(int j = 0; j < NUM_LCORES_FOR_RSS; j++){
+			fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",",
+			tsc_between_bursts_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
+			tsc_process_burst_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
+			burst_size[j][i]);
+		}
+		fprintf(log_file, "\n");
+	}
+	fflush(log_file);
+	fclose(log_file);
+	// for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
+	// 	uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
+	// 	printf("\n\nCore %d\n", i);
+	// 	for(int j = 0; j < LATENCY_SAMPLE_SIZE; j++){
+	// 		curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+	// 		min_btw = RTE_MIN(min_btw, curr_btw);
+	// 		max_btw = RTE_MAX(max_btw, curr_btw);
+	// 		avg_btw += curr_btw;
+			
+	// 		curr_proc = tsc_process_burst_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+	// 		min_proc = RTE_MIN(curr_proc, min_proc);
+	// 		max_proc = RTE_MAX(curr_proc, max_proc);
+	// 		avg_proc += curr_proc;
+	// 	}
+	// 	printf("Time Between Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_btw, max_btw, avg_btw/LATENCY_SAMPLE_SIZE);
+	// 	printf("Time to Process Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_proc, max_proc, avg_proc/LATENCY_SAMPLE_SIZE);
+	// }
 
 	/* clean up the EAL */
 	rte_eal_cleanup();
