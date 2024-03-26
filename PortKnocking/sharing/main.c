@@ -116,7 +116,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 4
+#define NUM_LCORES_FOR_RSS 7
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 1024
@@ -629,7 +629,7 @@ l2fwd_main_loop(void)
 			rx_burst_end_tsc = rte_rdtsc();
 			// printf("Lcore id %u, tempi %u", lcore_id, tempi);
 			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
-			tempi = tempi == 63 ? 0: tempi+1;
+			tempi = tempi+1 % 64;
 		}
 		/* >8 End of read packet from RX queues. */
 	}

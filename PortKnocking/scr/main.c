@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 4
+#define NUM_LCORES_FOR_RSS 7
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 1024
@@ -150,8 +150,8 @@ int ctr = 0;
 
 #define NUM_PKTS_SCR NUM_LCORES_FOR_RSS
 
-uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][32];
-uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][32];
+uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][64];
+uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][64];
 
 
 
@@ -704,7 +704,7 @@ l2fwd_main_loop(void)
 			}
 			rx_burst_end_tsc = rte_rdtsc();
 			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
-			tempi = tempi == 31 ? 0: tempi+1;
+			tempi = tempi+1 % 64;
 		}
 		/* >8 End of read packet from RX queues. */
 	}
@@ -1422,7 +1422,7 @@ main(int argc, char **argv)
 	for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
 		uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
 		printf("\n\nCore %d\n", i);
-		for(int j = 0; j < 32; j++){
+		for(int j = 0; j < 64; j++){
 			curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
 			min_btw = RTE_MIN(min_btw, curr_btw);
 			max_btw = RTE_MAX(max_btw, curr_btw);
