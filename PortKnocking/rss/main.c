@@ -140,6 +140,7 @@ FILE *log_file;
 uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 uint64_t burst_size[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
+uint8_t num_tx_in_main_loop[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 
 /*
  * ethdev
@@ -530,6 +531,7 @@ l2fwd_main_loop(void)
 				buffer = tx_buffer[lcore_id];
 
 				sent = rte_eth_tx_buffer_flush(portid, lcore_id, buffer);
+				num_tx_in_main_loop[lcore_id][tempi] = sent;
 				if (sent){
 					port_statistics[lcore_id].tx += sent;
 				}
@@ -566,7 +568,10 @@ l2fwd_main_loop(void)
 		for (i = 0; i < qconf->n_rx_port; i++) {
 
 			portid = qconf->rx_port_list[i];
-			// TODO
+
+			rx_burst_start_tsc = rte_rdtsc();
+			tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
+			
 			nb_rx = rte_eth_rx_burst(portid, lcore_id,
 						 pkts_burst, MAX_PKT_BURST);
 			// if(nb_rx > 0){
@@ -577,8 +582,6 @@ l2fwd_main_loop(void)
 			if (unlikely(nb_rx == 0))
 				continue;
 			burst_size[lcore_id][tempi] = nb_rx;
-			rx_burst_start_tsc = rte_rdtsc();
-			tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
 
 			// port_statistics[portid].rx += nb_rx;
 			port_statistics[lcore_id].rx += nb_rx;
@@ -1309,19 +1312,20 @@ main(int argc, char **argv)
 	log_file = fopen(name_buffer, "w");
 	uint8_t i;
 	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		fprintf(log_file, "core %u,core %u,core %u,",i,i,i);
+		fprintf(log_file, "core %u,core %u,core %u,core %u,",i,i,i,i);
 	}
 	fprintf(log_file, "\n");
 	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		fprintf(log_file, "Time Between Bursts, Time to Process Burst, Burst Size,");
+		fprintf(log_file, "Time Between Bursts, Time to Process Burst, Burst Size, Number of Packets Trasmitted in main loop,");
 	}
 	fprintf(log_file, "\n");
 	for(i = 0; i < LATENCY_SAMPLE_SIZE; i++){
 		for(int j = 0; j < NUM_LCORES_FOR_RSS; j++){
-			fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",",
+			fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu8",",
 			tsc_between_bursts_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
 			tsc_process_burst_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
-			burst_size[j][i]);
+			burst_size[j][i],
+			num_tx_in_main_loop[j][i]);
 		}
 		fprintf(log_file, "\n");
 	}

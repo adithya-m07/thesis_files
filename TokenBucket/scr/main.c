@@ -152,8 +152,8 @@ struct token_elem{
 
 #define NUM_PKTS_SCR NUM_LCORES_FOR_RSS
 
-uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][64];
-uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][64];
+// uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][64];
+// uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][64];
 
 
 
@@ -549,9 +549,9 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 
 	// Since the trace contains a dummy mac address, replace it with the actual src address
 	if(USING_TRACE){
-		*(uint64_t*) (&eth->src_addr.addr_bytes[0]) = 0x9e0813d23fb8;
+		*(uint64_t*) (&eth->dst_addr.addr_bytes[0]) = 0x9e0813d23fb8;
 	}
-	rte_ether_addr_copy(&eth->src_addr, &eth->dst_addr);
+	// rte_ether_addr_copy(&eth->src_addr, &eth->dst_addr);
 	/* src addr */
 	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
 }
@@ -708,8 +708,8 @@ l2fwd_main_loop(void)
 				continue;
 
 			// temp_tsc = rte_rdtsc();
-			rx_burst_start_tsc = rte_rdtsc();
-			tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
+			// rx_burst_start_tsc = rte_rdtsc();
+			// tsc_between_bursts_rx[lcore_id][tempi] = rx_burst_start_tsc - rx_burst_end_tsc;
 			
 			// port_statistics[portid].rx += nb_rx;
 			port_statistics[lcore_id].rx += nb_rx;
@@ -720,9 +720,9 @@ l2fwd_main_loop(void)
 				// l2fwd_simple_forward(m, portid, lcore_id);
 				l2fwd_simple_forward(m, portid, lcore_id, state_map[lcore_id]);
 			}
-			rx_burst_end_tsc = rte_rdtsc();
-			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
-			tempi = tempi == 63 ? 0: tempi+1;
+			// rx_burst_end_tsc = rte_rdtsc();
+			// tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
+			// tempi = tempi == 63 ? 0: tempi+1;
 		}
 		/* >8 End of read packet from RX queues. */
 	}
@@ -1388,7 +1388,7 @@ main(int argc, char **argv)
 		// Create a file to write stats into
 		if(WRITE_INTO_FILE){
 			char name_buffer[50];
-			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_portknock_scr_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((rte_rdtsc() & (uint64_t) 0xFFFFFFFF00000000) >> 32));
+			snprintf(name_buffer, sizeof(name_buffer), "../stats/%"PRIu8"core_tokenbucket_scr_%"PRIu32".csv", NUM_LCORES_FOR_RSS, (uint32_t) ((rte_rdtsc() & (uint64_t) 0xFFFFFFFF00000000) >> 32));
 			log_file = fopen(name_buffer, "w");
 			uint8_t i;
 			for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
@@ -1436,24 +1436,24 @@ main(int argc, char **argv)
 		rte_eth_dev_close(portid);
 		printf(" Done\n");
 	}
-	printf("Latency Stats");
-	for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
-		printf("\n\nCore %d\n", i);
-		for(int j = 0; j < 64; j++){
-			curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
-			min_btw = RTE_MIN(min_btw, curr_btw);
-			max_btw = RTE_MAX(max_btw, curr_btw);
-			avg_btw += curr_btw;
+	// printf("Latency Stats");
+	// for(int i = 0; i < NUM_LCORES_FOR_RSS; i++){
+	// 	uint64_t min_btw=-1, max_btw=0, avg_btw=0, curr_btw=0, min_proc=-1, max_proc=0, avg_proc=0, curr_proc=0;
+	// 	printf("\n\nCore %d\n", i);
+	// 	for(int j = 0; j < 64; j++){
+	// 		curr_btw = tsc_between_bursts_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+	// 		min_btw = RTE_MIN(min_btw, curr_btw);
+	// 		max_btw = RTE_MAX(max_btw, curr_btw);
+	// 		avg_btw += curr_btw;
 			
-			curr_proc = tsc_process_burst_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
-			min_proc = RTE_MIN(curr_proc, min_proc);
-			max_proc = RTE_MAX(curr_proc, max_proc);
-			avg_proc += curr_proc;
-		}
-		printf("Time Between Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_btw, max_btw, avg_btw/64);
-		printf("Time to Process Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_proc, max_proc, avg_proc/64);
-	}
+	// 		curr_proc = tsc_process_burst_rx[i][j]/(rte_get_tsc_hz()/NS_PER_S);
+	// 		min_proc = RTE_MIN(curr_proc, min_proc);
+	// 		max_proc = RTE_MAX(curr_proc, max_proc);
+	// 		avg_proc += curr_proc;
+	// 	}
+	// 	printf("Time Between Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_btw, max_btw, avg_btw/64);
+	// 	printf("Time to Process Bursts: Min: %"PRIu64" Max: %"PRIu64" Avg: %"PRIu64"\n", min_proc, max_proc, avg_proc/64);
+	// }
 	/* clean up the EAL */
 	rte_eal_cleanup();
 	printf("Bye...\n");
