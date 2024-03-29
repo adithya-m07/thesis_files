@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 7
+#define NUM_LCORES_FOR_RSS 5
 
 // Port Knocking DS
 #define MAX_IPV4_5TUPLES 1024

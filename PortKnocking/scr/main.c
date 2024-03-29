@@ -115,7 +115,7 @@ static struct rte_eth_conf port_conf = {
 	
 };
 
-#define NUM_LCORES_FOR_RSS 7
+#define NUM_LCORES_FOR_RSS 5
 #define USING_TRACE 1
 
 
