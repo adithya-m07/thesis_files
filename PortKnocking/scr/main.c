@@ -136,7 +136,7 @@ enum port_list{
 
 FILE *log_file;
 
-#define WRITE_INTO_FILE 1
+#define WRITE_INTO_FILE 0
 
 // Metadata element for SCR
 struct metadata_elem{
@@ -157,7 +157,7 @@ uint64_t tsc_process_burst_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 uint64_t tsc_between_bursts_rx[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 uint64_t burst_size[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 uint8_t num_tx_in_main_loop[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
-
+uint64_t tsc_main_code[NUM_LCORES_FOR_RSS][LATENCY_SAMPLE_SIZE];
 
 
 /*
@@ -552,12 +552,14 @@ l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 
 /* Simple forward. 8< */
 static void
-l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, struct rte_hash *state_map)
+l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid, unsigned lcore_id, struct rte_hash *state_map, unsigned tempj)
 {
-	scr_state_update(m, portid, lcore_id, state_map);
 	unsigned dst_port;
 	int sent;
 	struct rte_eth_dev_tx_buffer *buffer;
+	uint64_t start_tsc = rte_rdtsc();
+	scr_state_update(m, portid, lcore_id, state_map);
+	tsc_main_code[lcore_id][tempj] = rte_rdtsc() - start_tsc;
 
 	dst_port = l2fwd_dst_ports[portid];
 
@@ -582,7 +584,7 @@ l2fwd_main_loop(void)
 	int sent;
 	unsigned lcore_id;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc, rx_burst_start_tsc, rx_burst_end_tsc;
-	unsigned i, j, portid, nb_rx, tempi;
+	unsigned i, j, portid, nb_rx, tempi, tempj;
 	struct lcore_queue_conf *qconf;
 	const uint64_t drain_tsc = (rte_get_tsc_hz() + US_PER_S - 1) / US_PER_S *
 			BURST_TX_DRAIN_US;
@@ -595,6 +597,7 @@ l2fwd_main_loop(void)
 	rx_burst_start_tsc = 0;
 	rx_burst_end_tsc = 0;
 	tempi = 0;
+	tempj = 0;
 
 	lcore_id = rte_lcore_id();
 	qconf = &lcore_queue_conf[lcore_id];
@@ -711,7 +714,8 @@ l2fwd_main_loop(void)
 				m = pkts_burst[j];
 				rte_prefetch0(rte_pktmbuf_mtod(m, void *));
 				// l2fwd_simple_forward(m, portid, lcore_id);
-				l2fwd_simple_forward(m, portid, lcore_id, state_map[lcore_id]);
+				l2fwd_simple_forward(m, portid, lcore_id, state_map[lcore_id], tempj);
+				tempj = (tempj +1) % LATENCY_SAMPLE_SIZE;
 			}
 			rx_burst_end_tsc = rte_rdtsc();
 			tsc_process_burst_rx[lcore_id][tempi] = rx_burst_end_tsc - rx_burst_start_tsc;
@@ -1436,20 +1440,21 @@ main(int argc, char **argv)
 	log_file = fopen(name_buffer, "w");
 	uint8_t i;
 	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		fprintf(log_file, "core %u,core %u,core %u,core %u,",i,i,i,i);
+		fprintf(log_file, "core %u,core %u,core %u,core %u,core%u,",i,i,i,i,i);
 	}
 	fprintf(log_file, "\n");
 	for(i = 0; i < NUM_LCORES_FOR_RSS; i++){
-		fprintf(log_file, "Time Between Bursts, Time to Process Burst, Burst Size, Number of Packets Trasmitted in main loop,");
+		fprintf(log_file, "Time Between Bursts, Time to Process Burst, Burst Size, Number of Packets Trasmitted in main loop,Time for Main processing code,");
 	}
 	fprintf(log_file, "\n");
 	for(i = 0; i < LATENCY_SAMPLE_SIZE; i++){
 		for(int j = 0; j < NUM_LCORES_FOR_RSS; j++){
-			fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu8",",
+			fprintf(log_file, "%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu8",%"PRIu64",",
 			tsc_between_bursts_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
 			tsc_process_burst_rx[j][i]/(rte_get_tsc_hz()/NS_PER_S),
 			burst_size[j][i],
-			num_tx_in_main_loop[j][i]);
+			num_tx_in_main_loop[j][i],
+			tsc_main_code[j][i]);
 		}
 		fprintf(log_file, "\n");
 	}
